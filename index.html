@@ -12,7 +12,7 @@
     
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- FIXED: Pointing to UMD build for browser compatibility -->
+    <!-- Pointing to UMD build for browser compatibility -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
     <!-- Using Firebase Compatibility libraries for broader support -->
@@ -78,6 +78,15 @@
             'Bacayan',  
             'Lapu-lapu',  
             'AS Fortuna'
+        ];
+
+        // Service Categories
+        const SERVICE_CATEGORIES = [
+            'Specialized Massage',
+            'Relax & Revive',
+            'Premium Massage',
+            'Add-ons',
+            'Others'
         ];
         
         // --- FIREBASE CONFIGURATION ---
@@ -159,7 +168,9 @@
             DoorOpen: (p) => <Icon name="door-open" {...p} />, // ADDED: Icon for Rooms
             CreditCard: (p) => <Icon name="credit-card" {...p} />, // ADDED: Card
             Smartphone: (p) => <Icon name="smartphone" {...p} />, // ADDED: GCash/Phone
-            Banknote: (p) => <Icon name="banknote" {...p} /> // ADDED: Cash
+            Banknote: (p) => <Icon name="banknote" {...p} />, // ADDED: Cash
+            Landmark: (p) => <Icon name="landmark" {...p} />, // ADDED: Bank
+            Map: (p) => <Icon name="map" {...p} />
         };
 
         // --- SECURITY HELPER: Hashing Function ---
@@ -206,7 +217,6 @@
             </div>
         );
 
-
         // --- List Management Component (Admin Only) ---
         // ADDED: rooms prop and logic
         const ListManagement = ({ therapists, services, durations, drivers, rooms, onAdd, onDelete, onEdit }) => {
@@ -214,6 +224,7 @@
             
             // Add State
             const [newItemName, setNewItemName] = useState('');
+            const [newItemCategory, setNewItemCategory] = useState(SERVICE_CATEGORIES[0]); // ADDED: Service Category State
             const [newItemPrices, setNewItemPrices] = useState({});  
             const [newItemCommission, setNewItemCommission] = useState('');  
             
@@ -233,7 +244,8 @@
                 let extraData = null;
                 if (activeTab === 'service') {
                     if (durations.length === 0) return; 
-                    extraData = newItemPrices;
+                    // ADDED: Include category in extraData
+                    extraData = { prices: newItemPrices, category: newItemCategory };
                 } else if (activeTab === 'therapist') {
                     extraData = { commissionRate: parseFloat(newItemCommission) || 0 };
                 }
@@ -348,6 +360,18 @@
                             {/* Dynamic Price Inputs for Services */}
                             {activeTab === 'service' && (
                                 <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                    {/* ADDED: Category Selector */}
+                                    <div className="mb-3">
+                                        <label className="text-xs font-bold text-slate-500 mb-1 block uppercase">Category</label>
+                                        <select 
+                                            value={newItemCategory} 
+                                            onChange={e => setNewItemCategory(e.target.value)}
+                                            className="w-full p-2 border rounded-lg text-sm bg-white outline-none"
+                                        >
+                                            {SERVICE_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                                        </select>
+                                    </div>
+
                                     <p className="text-xs font-bold text-slate-500 mb-2 uppercase">Set Prices per Duration (Optional)</p>
                                     {durations.length === 0 && <p className="text-xs text-red-400 italic">Add items to "Minutes" tab first to set prices.</p>}
                                     <div className="grid grid-cols-2 gap-2">
@@ -419,7 +443,13 @@
                                                         className="flex-1 p-2 border rounded text-sm bg-white focus:ring-2 focus:ring-logo-green-500 mr-2"
                                                     />
                                                 ) : (
-                                                    <span className="text-slate-700 font-medium">{item.name}</span>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-slate-700 font-medium">{item.name}</span>
+                                                        {/* ADDED: Show Category in List */}
+                                                        {activeTab === 'service' && item.category && (
+                                                            <span className="text-[10px] text-slate-400 uppercase">{item.category}</span>
+                                                        )}
+                                                    </div>
                                                 )}
                                                 
                                                 <div className="flex gap-1">
@@ -620,8 +650,7 @@
             // Added expense-related fields and viewType
             const [formData, setFormData] = useState({
                 clientName: '',  
-                clientContact: '',
-                clientAddress: '', 
+                clientContact: '', 
                 service: '',  
                 therapist: '',  
                 amount: '',  
@@ -879,8 +908,7 @@
                             return a.name.localeCompare(b.name);
                         }));
                     }, (error) => console.error("Sync Error: Rooms", error));
-
-
+                
                 return () => {  
                     unsubTrans();  
                     unsubUsers();  
@@ -957,6 +985,27 @@
 
             // --- 3. HELPERS ---
             
+            // ADDED: Helper to Group Services by Category
+            const groupedServices = useMemo(() => {
+                const groups = {};
+                // Initialize groups based on constants to ensure order
+                SERVICE_CATEGORIES.forEach(cat => groups[cat] = []);
+                
+                servicesList.forEach(s => {
+                    const cat = s.category || 'Others'; // Default to 'Others' if undefined
+                    if (!groups[cat]) {
+                        // If category not in standard list, put in 'Others' or create new group? 
+                        // Let's create new group to be safe, or just push to Others.
+                        // For now, let's force standard categories.
+                        if (groups['Others']) groups['Others'].push(s);
+                        else groups[cat] = [s];
+                    } else {
+                        groups[cat].push(s);
+                    }
+                });
+                return groups;
+            }, [servicesList]);
+
             const seedDefaultUsers = async (db, basePath) => {
                 const defaults = [
                     { name: 'Owner Admin', username: 'admin', pin: '888888', role: 'admin' },  
@@ -1295,7 +1344,15 @@
                 } else if (listType === 'service') {
                     collectionName = 'services';
                     checkList = servicesList;
-                    if (extraData) data.prices = extraData;  
+                    // UPDATED: Handle extraData which now contains prices AND category
+                    if (extraData) {
+                        if (extraData.prices || extraData.category) {
+                            data.prices = extraData.prices || {};
+                            data.category = extraData.category || 'Others';
+                        } else {
+                            data.prices = extraData; // Fallback
+                        }
+                    } 
                 } else if (listType === 'duration') {
                     collectionName = 'durations';
                     checkList = durationsList;
@@ -1487,9 +1544,6 @@
             const handleServiceChange = (serviceName) => {
                 const newPrice = calculatePrice(serviceName, formData.duration, formData.transportFee);
                 setFormData({ ...formData, service: serviceName, amount: newPrice });
-                
-                // Optional: Update all existing rows if user changes main dropdown? 
-                // Let's NOT do that to preserve customizations. Main dropdown acts as default for NEW selections.
             };
 
             const handleDurationChange = (durationName) => {
@@ -1622,8 +1676,7 @@
 
                         transactionsToSave.push({
                             clientName: formData.clientName, 
-                            clientContact: formData.clientContact,
-                            clientAddress: formData.clientAddress, 
+                            clientContact: formData.clientContact, 
                             description: formData.notes, 
                             service: row.service, 
                             therapist: thName,
@@ -2173,7 +2226,7 @@
                                              if (idxA === -1) return 1;
                                              if (idxB === -1) return -1;
                                              return idxA - idxB;
-                                          }).map(branch => (
+                                        }).map(branch => (
                                             <div key={branch} className="mb-4 last:mb-0">
                                                 {(user.currentBranch === 'ALL' || Object.keys(therapistStats).length > 1) && (
                                                     <h4 className="text-[10px] font-bold text-logo-green-700 uppercase mb-2 bg-logo-green-50 px-2 py-1 rounded inline-block">
@@ -2197,7 +2250,7 @@
                                                     ))}
                                                 </div>
                                             </div>
-                                          ))
+                                        ))
                                     )}
                                 </div>
 
@@ -2285,10 +2338,15 @@
                                                                     {t.paymentMethod && (
                                                                         <span className={`ml-1 flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase ${
                                                                             t.paymentMethod === 'GCash' ? 'bg-blue-50 text-blue-600 border-blue-200' :
+                                                                            t.paymentMethod === 'Maya' ? 'bg-zinc-100 text-zinc-700 border-zinc-300' :
+                                                                            t.paymentMethod === 'BPI' ? 'bg-red-50 text-red-600 border-red-200' :
+                                                                            t.paymentMethod === 'Eastwest Bank' ? 'bg-amber-50 text-amber-600 border-amber-200' :
                                                                             t.paymentMethod === 'Card' ? 'bg-purple-50 text-purple-600 border-purple-200' :
                                                                             'bg-emerald-50 text-emerald-600 border-emerald-200'
                                                                         }`}>
                                                                             {t.paymentMethod === 'GCash' && <Icons.Smartphone size={8} />}
+                                                                            {t.paymentMethod === 'Maya' && <Icons.Smartphone size={8} />}
+                                                                            {(t.paymentMethod === 'BPI' || t.paymentMethod === 'Eastwest Bank') && <Icons.Landmark size={8} />}
                                                                             {t.paymentMethod === 'Card' && <Icons.CreditCard size={8} />}
                                                                             {t.paymentMethod === 'Cash' && <Icons.Banknote size={8} />}
                                                                             {t.paymentMethod}
@@ -2454,22 +2512,12 @@
                                         <label className={`border-2 rounded-xl p-3 flex flex-col items-center gap-2 ${formData.type==='booking'?'border-logo-green-700 bg-logo-green-50/50':'border-slate-100'}`}><input type="radio" name="type" value="booking" checked={formData.type==='booking'} onChange={(e)=>setFormData({...formData, type:e.target.value})} className="hidden"/><Icons.Calendar/><span className="text-sm font-bold">Appointment</span></label>
                                         <label className={`border-2 rounded-xl p-3 flex flex-col items-center gap-2 ${formData.type==='sale'?'border-teal-600 bg-teal-50/50':'border-slate-100'}`}><input type="radio" name="type" value="sale" checked={formData.type==='sale'} onChange={(e)=>setFormData({...formData, type:e.target.value})} className="hidden"/><Icons.DollarSign/><span className="text-sm font-bold">Direct Pay</span></label>
                                     </div>
+                                    
                                     <div className="space-y-2">
-    <input required placeholder="Client Name*" value={formData.clientName} onChange={e=>setFormData({...formData, clientName:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
-    
-    <input placeholder="Client Contact No." value={formData.clientContact} onChange={e=>setFormData({...formData, clientContact:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
-
-    {/* NEW: CLIENT ADDRESS FIELD (REQUIRED FOR HOME SERVICE) */}
-    {formData.location === 'home' && (
-        <input 
-            required={formData.location === 'home'}
-            placeholder="Client Address (for Home Service)*" 
-            value={formData.clientAddress} 
-            onChange={e=>setFormData({...formData, clientAddress:e.target.value})} 
-            className="w-full p-3 border rounded-xl bg-slate-50 border-blue-400 focus:ring-blue-500"
-        />
-    )}
-</div>
+                                        <input required placeholder="Client Name*" value={formData.clientName} onChange={e=>setFormData({...formData, clientName:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
+                                        {/* ADDED: Client Contact Input */}
+                                        <input placeholder="Client Contact No." value={formData.clientContact} onChange={e=>setFormData({...formData, clientContact:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
+                                    </div>
                                     
                                     <div className="space-y-4">
                                         
@@ -2502,7 +2550,11 @@
                                                                     className="text-xs p-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-1 focus:ring-logo-green-500 outline-none w-full"
                                                                 >
                                                                     <option value="" disabled>Select Service*</option>
-                                                                    {servicesList.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                                                    {Object.entries(groupedServices).map(([category, services]) => (
+                                                                        <optgroup key={category} label={category}>
+                                                                            {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                                                        </optgroup>
+                                                                    ))}
                                                                 </select>
                                                                 <div className="grid grid-cols-2 gap-2">
                                                                     <select 
@@ -2579,21 +2631,25 @@
                                     <div>
                                         <label className="text-xs font-bold text-slate-500 mb-2 block uppercase">Payment Method</label>
                                         <div className="grid grid-cols-3 gap-2">
-                                            {['Cash', 'GCash', 'Card'].map(method => (
+                                            {[
+                                                { label: 'Cash', icon: <Icons.Banknote size={18}/> }, 
+                                                { label: 'GCash', icon: <Icons.Smartphone size={18}/> }, 
+                                                { label: 'Maya', icon: <Icons.Smartphone size={18}/> }, 
+                                                { label: 'BPI', icon: <Icons.Landmark size={18}/> }, 
+                                                { label: 'Eastwest Bank', icon: <Icons.Landmark size={18}/> }
+                                            ].map(method => (
                                                 <button
                                                     type="button"
-                                                    key={method}
-                                                    onClick={() => setFormData({ ...formData, paymentMethod: method })}
-                                                    className={`p-3 rounded-xl border flex flex-col items-center justify-center gap-1 text-xs font-bold transition-all ${
-                                                        formData.paymentMethod === method
-                                                            ? 'bg-slate-800 text-white border-slate-800 shadow-md'
+                                                    key={method.label}
+                                                    onClick={() => setFormData({ ...formData, paymentMethod: method.label })}
+                                                    className={`p-3 rounded-xl border flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition-all ${
+                                                        formData.paymentMethod === method.label
+                                                            ? 'bg-slate-800 text-white border-slate-800 shadow-md transform scale-[1.02]'
                                                             : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
                                                     }`}
                                                 >
-                                                   {method === 'Cash' && <Icons.Banknote size={18} />}
-                                                   {method === 'GCash' && <Icons.Smartphone size={18} />}
-                                                   {method === 'Card' && <Icons.CreditCard size={18} />}
-                                                   {method}
+                                                   {method.icon}
+                                                   <span className="text-center leading-tight">{method.label}</span>
                                                 </button>
                                             ))}
                                         </div>
@@ -2661,7 +2717,7 @@
                                 </form>
                             </div>
                         )}
-
+                        
                         {view === 'profile' && (
                             <div className="bg-white rounded-xl shadow-sm border border-logo-green-100 p-6 fade-in">
                                 <h3 className="font-bold text-slate-800 mb-4 flex gap-2"><Icons.UserCog className="text-logo-green-700"/> Profile</h3>
