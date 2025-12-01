@@ -634,7 +634,7 @@
                             {/* Commission Rate Input for Therapists */}
                             {activeTab === 'therapist' && (
                                 <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                    <label className="text-xs font-bold text-slate-500 mb-2 uppercase block">Commission Rate (%)</label>
+                                    <label className="text-xs font-bold text-slate-500 mb-2 block uppercase">Commission Rate (%)</label>
                                     <input
                                         type="number"
                                         min="0"
@@ -1001,24 +1001,31 @@
                         const auth = firebase.auth();
                         const db = firebase.firestore();
 
+                        // Attempt anonymous sign-in first, required for accessing public paths
                         await auth.signInAnonymously();
 
-                        auth.onAuthStateChanged((u) => {
+                        auth.onAuthStateChanged(async (u) => {
                             if (u) {
                                 setFbUser(u);
-                                setFb({ db, auth, appId: currentAppId });
+                                const newFb = { db, auth, appId: currentAppId };
+                                setFb(newFb);
+                                
+                                // Fetch initial config immediately on auth state change
+                                try {
+                                    const configRef = db.collection('config').doc('app_settings');
+                                    const configSnap = await configRef.get();
+                                    if (configSnap.exists) {
+                                         const data = configSnap.data();
+                                         if(data.dispatchContact) {
+                                            setAppConfig(prev => ({ ...prev, dispatchContact: data.dispatchContact }));
+                                         }
+                                    }
+                                } catch(e) {
+                                    console.error("Failed to fetch app config:", e);
+                                    // Non-critical failure, continue
+                                }
                             }
                         });
-                        
-                        // NEW: Load remote config (for dispatch contact)
-                        const configRef = db.collection('config').doc('app_settings');
-                        const configSnap = await configRef.get();
-                        if (configSnap.exists) {
-                             const data = configSnap.data();
-                             if(data.dispatchContact) {
-                                setAppConfig(prev => ({ ...prev, dispatchContact: data.dispatchContact }));
-                             }
-                        }
 
                     } catch (error) {  
                         console.error("FB Init Error:", error);  
@@ -1066,7 +1073,7 @@
                             setModal({ isOpen: true, type: 'alert', title: 'Sync Complete', message: `Successfully uploaded ${syncedCount} offline records.`, confirmColor: 'logo-green', onConfirm: closeModal });
 
                         } catch (error) {
-                            console.error("Sync failed", error);
+                            console.log("Sync failed, trying again later:", error);
                         } finally {
                             setIsGlobalLoading(false);
                         }
@@ -1077,18 +1084,112 @@
             }, [isOnline, fb, offlineQueue.length]);
 
 
-            // --- 2. DATA SYNC (Listener Management) ---
+            // --- 2. DATA SYNC - MASTER LISTS (Reads all public master data) ---
             useEffect(() => {
                 if (!fb || !fbUser) return;
+                
                 const { db, appId } = fb;
                 const basePath = `artifacts/${appId}/public/data`;
-                
                 const getCollection = (name) => db.collection(`${basePath}/${name}`);
                 
+                try {
+                    const unsubUsers = getCollection('users')
+                        .onSnapshot(async (snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            if (data.length === 0) {
+                                console.log("Seeding default users...");
+                                seedDefaultUsers(db, basePath);
+                                return;  
+                            }
+                            // Simplified pin migration check
+                            const needsUpdate = data.filter(u => (u.username === 'admin' && u.pin.length < 20));
+                            if (needsUpdate.length > 0) {
+                                // This block handles pin hashing migration, keeping it here for continuity.
+                                const u = needsUpdate[0];
+                                if (u.pin === '8888' || u.pin === '888888') {  
+                                     const hashedPin = await hashPin('888888');  
+                                     await getCollection('users').doc(u.id).update({ pin: hashedPin, role: 'admin' });  
+                                }
+                            }
+                            setUsers(data);
+                        }, (error) => console.error("Sync Error: Users", error));
+
+                    const unsubTherapists = getCollection('therapists')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setTherapistsList(data.sort((a, b) => a.name.localeCompare(b.name)));
+                        });
+
+                    const unsubServices = getCollection('services')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setServicesList(data.sort((a, b) => a.name.localeCompare(b.name)));
+                        });
+
+                    const unsubDurations = getCollection('durations')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setDurationsList(data.sort((a, b) => {
+                                const valA = parseInt(a.name) || 0;
+                                const valB = parseInt(b.name) || 0;
+                                return valA - valB;
+                            }));
+                        });
+
+                    const unsubDrivers = getCollection('drivers')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setDriversList(data.sort((a, b) => a.name.localeCompare(b.name)));
+                        }, (error) => console.error("Sync Error: Drivers", error));
+
+                    const unsubRooms = getCollection('rooms')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setRoomsList(data.sort((a, b) => {
+                                const valA = parseInt(a.name);
+                                const valB = parseInt(b.name);
+                                if (!isNaN(valA) && !isNaN(valB)) return valA - valB;
+                                return a.name.localeCompare(b.name);
+                            }));
+                        }, (error) => console.error("Sync Error: Rooms", error));
+
+                    const unsubDriverLocations = getCollection('driver_locations')
+                        .onSnapshot((snapshot) => {
+                            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setDriverLocations(data);
+                            // Set dbReady only after all crucial lists are loaded (including driver locations for map)
+                            if (dbReady === false) setDbReady(true);
+                        }, (error) => console.error("Sync Error: Driver Locations", error));
+                    
+                    return () => {  
+                        unsubUsers();  
+                        unsubTherapists();  
+                        unsubServices();
+                        unsubDurations();
+                        unsubDrivers();
+                        unsubRooms();
+                        unsubDriverLocations();
+                    };
+                } catch(e) {
+                    console.error("Master List setup failed:", e);
+                    // If this fails, the app cannot proceed to the dashboard effectively.
+                }
+            }, [fb, fbUser]);  
+
+            // --- 2b. DATA SYNC - TRANSACTIONS ---
+            useEffect(() => {
+                if (!fb || !fbUser || !dbReady) return; // Only run if FB/Auth/Master Lists are ready
+                
+                const { db, appId } = fb;
+                const basePath = `artifacts/${appId}/public/data`;
+                const getCollection = (name) => db.collection(`${basePath}/${name}`);
+
                 let unsubTrans = () => {};
+                
                 if (isTransactionListenerActive && view === 'dashboard') {
                     let query = getCollection('transactions');
                     if (dashboardDate) {
+                        // Use where clause for filtering by date
                         query = query.where('bookingDate', '==', dashboardDate);
                     }
 
@@ -1096,95 +1197,18 @@
                             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                             data.sort((a, b) => getMillis(b.timestamp) - getMillis(a.timestamp));
                             setTransactions(data);
-                            setDbReady(true);
                         }, (error) => console.error("Sync Error: Transactions", error));
                 } else if (view !== 'dashboard' && isTransactionListenerActive) {
+                    // Stop listening when leaving dashboard
                     setIsTransactionListenerActive(false);
                 }
 
-                // Users
-                const unsubUsers = getCollection('users')
-                    .onSnapshot(async (snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        if (data.length === 0) {
-                            seedDefaultUsers(db, basePath);
-                            return;  
-                        }
-                        // Simple pin migration logic (kept from original)
-                        const needsUpdate = data.filter(u => (u.username === 'admin' && u.pin.length < 20));
-                        for (const u of needsUpdate) {
-                             if (u.pin === '8888' || u.pin === '888888') {  
-                                 const hashedPin = await hashPin('888888');  
-                                 await getCollection('users').doc(u.id).update({ pin: hashedPin, role: 'admin' });  
-                             }
-                        }
-                        setUsers(data);
-                    }, (error) => console.error("Sync Error: Users", error));
-
-                // Master Lists
-                const unsubTherapists = getCollection('therapists')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setTherapistsList(data.sort((a, b) => a.name.localeCompare(b.name)));
-                    });
-
-                const unsubServices = getCollection('services')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setServicesList(data.sort((a, b) => a.name.localeCompare(b.name)));
-                    });
-
-                const unsubDurations = getCollection('durations')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setDurationsList(data.sort((a, b) => {
-                            const valA = parseInt(a.name) || 0;
-                            const valB = parseInt(b.name) || 0;
-                            return valA - valB;
-                        }));
-                    });
-
-                // Drivers Listener
-                const unsubDrivers = getCollection('drivers')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setDriversList(data.sort((a, b) => a.name.localeCompare(b.name)));
-                    }, (error) => console.error("Sync Error: Drivers", error));
-
-                // Rooms Listener
-                const unsubRooms = getCollection('rooms')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        // Sort numerically if names are numbers, otherwise alphabetically
-                        setRoomsList(data.sort((a, b) => {
-                            const valA = parseInt(a.name);
-                            const valB = parseInt(b.name);
-                            if (!isNaN(valA) && !isNaN(valB)) return valA - valB;
-                            return a.name.localeCompare(b.name);
-                        }));
-                    }, (error) => console.error("Sync Error: Rooms", error));
-
-                // NEW: Driver Location Listener
-                const unsubDriverLocations = getCollection('driver_locations')
-                    .onSnapshot((snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setDriverLocations(data);
-                    }, (error) => console.error("Sync Error: Driver Locations", error));
+                return () => unsubTrans();
                 
-                return () => {  
-                    unsubTrans();  
-                    unsubUsers();  
-                    unsubTherapists();  
-                    unsubServices();
-                    unsubDurations();
-                    unsubDrivers();
-                    unsubRooms();
-                    unsubDriverLocations(); // Cleanup new listener
-                };
-            }, [fb, fbUser, isTransactionListenerActive, view, dashboardDate]);  
+            }, [fb, fbUser, isTransactionListenerActive, view, dashboardDate, dbReady]);  
 
 
-            // --- 2b. LAZY LOAD HISTORY ---
+            // --- 2c. LAZY LOAD HISTORY ---
             useEffect(() => {
                 if (!fb || !fbUser || view !== 'history') {
                     if (history.length > 0) setHistory([]);  
@@ -1207,7 +1231,7 @@
                 return () => unsub();
             }, [fb, fbUser, view]);  
 
-            // --- 2c. REAL-TIME USER ROLE SYNC ---
+            // --- 2d. REAL-TIME USER ROLE SYNC & PRESENCE ---
             useEffect(() => {
                 if (user && users.length > 0) {
                     const freshData = users.find(u => u.id === user.id);
@@ -1219,10 +1243,8 @@
                         }
                     }
                 }
-            }, [users, user]);
-            
-            // --- 2d. PRESENCE SYSTEM ---
-            useEffect(() => {
+                
+                // Presence System Logic (Runs only if user is logged in)
                 if (!user || !fb) return;
                 
                 const updatePresence = () => {
@@ -1237,7 +1259,8 @@
                 const interval = setInterval(updatePresence, 60000);  
 
                 return () => clearInterval(interval);
-            }, [user, fb]);
+
+            }, [users, user, fb]);
 
             const isUserOnline = (lastActive) => {
                 if (!lastActive) return false;
@@ -1246,7 +1269,7 @@
             };
 
 
-            // --- 3. HELPERS ---
+            // --- 3. HELPERS (Remains the same) ---
             
             // Helper to group Services by Category
             const groupedServices = useMemo(() => {
