@@ -1010,7 +1010,7 @@
                                 const newFb = { db, auth, appId: currentAppId };
                                 setFb(newFb);
                                 
-                                // Fetch initial config immediately on auth state change
+                                // Fetch initial config inside try/catch to prevent blocking if permissions are missing
                                 try {
                                     const configRef = db.collection('config').doc('app_settings');
                                     const configSnap = await configRef.get();
@@ -1021,8 +1021,8 @@
                                          }
                                     }
                                 } catch(e) {
-                                    console.error("Failed to fetch app config:", e);
-                                    // Non-critical failure, continue
+                                    // Non-critical error, log it but continue
+                                    console.error("Failed to fetch app config: ", e);
                                 }
                             }
                         });
@@ -1707,7 +1707,7 @@
                     collectionName = 'drivers';
                     checkList = driversList;
                 }
-                else if (listType === 'room') { 
+                else if (listType === 'room') {
                     collectionName = 'rooms';
                     checkList = roomsList;
                 }
