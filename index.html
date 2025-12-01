@@ -275,8 +275,10 @@
                     mapId: 'AHMAS_DISPATCH_MAP' // Using Map ID
                 });
 
-                // 3. Clear existing markers (only necessary if we stored the map object in state, but good practice for cleanup)
-                // In this implementation, the old markers will be collected by JS GC when the effect reruns and overwrites the map instance
+                // 3. Clear existing markers 
+                // We recreate the markers on every dependency change, so we must first clear any old ones.
+                Object.values(markerRef.current).forEach(marker => marker.setMap(null));
+                markerRef.current = {};
 
                 // 4. Track info windows to close previous ones
                 let currentInfoWindow = null;
@@ -2132,7 +2134,7 @@
                     }
 
                     if (users.some(u => u.username.toLowerCase() === trimmedUsername.toLowerCase())) {  
-                        setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
+                        setModal({ isOpen: true, true: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
                         return;  
                     }
                     
