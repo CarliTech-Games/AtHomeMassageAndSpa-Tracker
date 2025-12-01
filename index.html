@@ -233,9 +233,17 @@
         );
 
         // --- Dispatch Map Component (NEW VIEW) ---
-        const DispatchMap = ({ driverLocations, allUsers, appConfig, setModal, closeModal }) => {
+        const DispatchMap = ({ driverLocations, allUsers, appConfig, setModal, closeModal, user }) => { // ADDED user prop
             const mapRef = useRef(null);
             const markerRef = useRef({}); // Stores Google Maps marker instances
+
+            // 1. Get the current user's branch for messaging identification
+            const currentSenderId = useMemo(() => {
+                const userName = user.name.split(' ')[0] || 'Dispatch';
+                const userBranch = user.currentBranch === 'ALL' ? 'Admin' : user.currentBranch;
+                return encodeURIComponent(`From ${userName} @ ${userBranch}`);
+            }, [user.name, user.currentBranch]);
+
 
             // Merge driver status data with user details (for name and contact)
             const driverDetails = useMemo(() => {
@@ -276,7 +284,6 @@
                 });
 
                 // 3. Clear existing markers 
-                // We recreate the markers on every dependency change, so we must first clear any old ones.
                 Object.values(markerRef.current).forEach(marker => marker.setMap(null));
                 markerRef.current = {};
 
@@ -294,8 +301,6 @@
                         } else if (driver.isTrackingActive) {
                             markerColor = 'blue';
                         }
-
-                        // Use custom dot icon based on status
                         const iconUrl = `https://maps.google.com/mapfiles/ms/icons/${markerColor}-dot.png`;
 
                         const marker = new googleMaps.Marker({
@@ -304,6 +309,9 @@
                             icon: iconUrl,
                             title: `${driver.name} - ${driver.currentDriverStatus}`,
                         });
+
+                        // Create encoded message link for InfoWindow
+                        const encodedMessageLink = `sms:${driver.contactNumber}?body=${currentSenderId}+needs+to+contact+you.`;
 
                         const content = `
                             <div class="p-2 font-sans text-xs max-w-[200px] text-slate-800">
@@ -317,7 +325,7 @@
                                 
                                 <div class="mt-3 flex gap-2">
                                     <a href="tel:${driver.contactNumber}" class="text-blue-600 hover:text-blue-800 text-xs font-bold" target="_self">📞 Call</a>
-                                    <a href="sms:${driver.contactNumber}" class="text-teal-600 hover:text-teal-800 text-xs font-bold" target="_self">💬 Message</a>
+                                    <a href="${encodedMessageLink}" class="text-teal-600 hover:text-teal-800 text-xs font-bold" target="_self">💬 Message</a>
                                 </div>
                             </div>
                         `;
@@ -353,7 +361,7 @@
                     Object.values(markerRef.current).forEach(marker => marker.setMap(null));
                     markerRef.current = {};
                 };
-            }, [driverDetails]); // Re-run effect when driver data changes
+            }, [driverDetails, currentSenderId]); // Re-run effect when driver data or sender ID changes
 
 
             const callDriver = (number) => {
@@ -364,8 +372,10 @@
                 }
             };
             const messageDriver = (number) => {
+                const encodedBody = currentSenderId;
                 if (number && number !== 'N/A') {
-                    window.open(`sms:${number}`, '_self');
+                    // Using SMS scheme with predefined body
+                    window.open(`sms:${number}?body=${encodedBody}+needs+to+contact+you.`, '_self');
                 } else {
                     setModal({ isOpen: true, type: 'alert', title: 'Contact Error', message: 'Driver contact number is unavailable.', confirmColor: 'red', onConfirm: closeModal });
                 }
@@ -389,7 +399,7 @@
                                 <div className="text-center p-4">
                                     <Icons.Map size={48} className="mx-auto mb-2"/>
                                     <p className="text-sm">Google Maps API Key required or API loading failed.</p>
-                                    <p className="text-xs text-red-500 mt-1">Please ensure "YOUR\_GOOGLE\_MAPS\_API\_KEY\_HERE" is replaced with your valid key in the HTML header.</p>
+                                    <p className="text-xs text-red-500 mt-1">Please ensure the Google Maps API key is correct.</p>
                                 </div>
                             ) : (
                                 <span>Initializing Map...</span>
@@ -431,7 +441,7 @@
                                                     <button onClick={() => callDriver(d.contactNumber)} className="text-white bg-blue-600 hover:bg-blue-700 p-2 rounded-full shadow-md transition-transform active:scale-95" title="Call Driver">
                                                         <Icons.Smartphone size={20}/>
                                                     </button>
-                                                    <button onClick={() => messageDriver(d.contactNumber)} className="text-blue-600 bg-blue-100 hover:bg-blue-200 p-2 rounded-full shadow-sm transition-transform active:scale-95" title="Message Driver">
+                                                    <button onClick={() => messageDriver(d.contactNumber)} className="text-blue-600 bg-blue-100 hover:bg-blue-200 p-2 rounded-full shadow-sm transition-transform active:scale-95" title={`Message Driver (From ${user.currentBranch})`}>
                                                         <Icons.MessageSquare size={20}/>
                                                     </button>
                                                 </>
@@ -446,7 +456,7 @@
                     {/* Dispatch Contact Block */}
                     <div className="p-4 bg-slate-100 rounded-xl text-xs text-slate-600 border border-slate-200 flex justify-between items-center">
                         <div>
-                            <p className="font-bold text-slate-800 mb-1">Dispatch Hotline:</p>
+                            <p className="font-bold text-slate-800 mb-1">Dispatch Hotline (Fallback):</p>
                             <p className="text-sm font-mono text-logo-green-700">{dispatchContact}</p>
                         </div>
                         <div className="flex gap-2">
@@ -2422,6 +2432,7 @@
                                 appConfig={appConfig}
                                 setModal={setModal}
                                 closeModal={closeModal}
+                                user={user}
                             />
                         )}
 
