@@ -25,13 +25,13 @@
                 extend: {
                     colors: {
                         'logo-green': {
-                            50: '#E6FFE6',       // Very light background
-                            100: '#CCFFCC',       // Light background
-                            500: '#00B300',       // Medium
-                            600: '#009900',       // Primary Button Hover
-                            700: '#008000',       // Base Logo Green / Primary
-                            800: '#006600',       // Darker text/header
-                            900: '#004C00',       // Deepest text
+                            50: '#E6FFE6',        // Very light background
+                            100: '#CCFFCC',        // Light background
+                            500: '#00B300',        // Medium
+                            600: '#009900',        // Primary Button Hover
+                            700: '#008000',        // Base Logo Green / Primary
+                            800: '#006600',        // Darker text/header
+                            900: '#004C00',        // Deepest text
                         },
                         'teal': {
                             600: '#008080', // Keep some teal accent for contrast
@@ -59,11 +59,26 @@
             border-width: 5px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* Style for the select element's dropdown arrow to show in HTML rendering */
+        .custom-select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%239CA3AF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>');
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
     
     <div id="root"></div>
+
+    <script 
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCqz4TUTF6gIs5uG990RuywpePga3CtIQc&v=weekly" 
+        defer
+    ></script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
@@ -88,7 +103,6 @@
         ];
         
         // --- FIREBASE CONFIGURATION ---
-        // !!! THIS BLOCK HAS BEEN UPDATED WITH YOUR NEW PROJECT KEYS !!!
         const MANUAL_FIREBASE_CONFIG = {
             apiKey: "AIzaSyAKfftJL6ZkFCdxVT5wyWWPqtvPd2eRLJk",
             authDomain: "ahmas-system.firebaseapp.com",
@@ -103,7 +117,7 @@
         const firebaseConfig = MANUAL_FIREBASE_CONFIG;
         const currentAppId = firebaseConfig.projectId;
 
-        // --- ICON COMPONENT ---
+        // --- ICON COMPONENT (with MessageSquare and Map/Car related icons) ---
         const Icon = ({ name, size = 24, className = "", ...props }) => {
             const wrapperRef = useRef(null);
             useEffect(() => {
@@ -163,13 +177,15 @@
             MinusCircle: (p) => <Icon name="minus-circle" {...p} />,
             Wallet: (p) => <Icon name="wallet" {...p} />,
             TrendingUp: (p) => <Icon name="trending-up" {...p} />,
-            SteeringWheel: (p) => <Icon name="joystick" {...p} />, // Using joystick as proxy for steering wheel or car front
-            DoorOpen: (p) => <Icon name="door-open" {...p} />, // ADDED: Icon for Rooms
-            CreditCard: (p) => <Icon name="credit-card" {...p} />, // ADDED: Card
-            Smartphone: (p) => <Icon name="smartphone" {...p} />, // ADDED: GCash/Phone
-            Banknote: (p) => <Icon name="banknote" {...p} />, // ADDED: Cash
-            Landmark: (p) => <Icon name="landmark" {...p} />, // ADDED: Bank
-            Map: (p) => <Icon name="map" {...p} />
+            SteeringWheel: (p) => <Icon name="joystick" {...p} />, 
+            DoorOpen: (p) => <Icon name="door-open" {...p} />, 
+            CreditCard: (p) => <Icon name="credit-card" {...p} />, 
+            Smartphone: (p) => <Icon name="smartphone" {...p} />, 
+            Banknote: (p) => <Icon name="banknote" {...p} />, 
+            Landmark: (p) => <Icon name="landmark" {...p} />, 
+            Map: (p) => <Icon name="map" {...p} />,
+            MessageSquare: (p) => <Icon name="message-square" {...p} />, // ADDED: For messaging driver
+            Compass: (p) => <Icon name="compass" {...p} /> // ADDED: For tracking/dispatch map
         };
 
         // --- SECURITY HELPER: Hashing Function ---
@@ -216,14 +232,238 @@
             </div>
         );
 
-        // --- List Management Component (Admin Only) ---
-        // ADDED: rooms prop and logic
+        // --- Dispatch Map Component (NEW VIEW) ---
+        const DispatchMap = ({ driverLocations, allUsers, appConfig, setModal, closeModal }) => {
+            const mapRef = useRef(null);
+            const markerRef = useRef({}); // Stores Google Maps marker instances
+
+            // Merge driver status data with user details (for name and contact)
+            const driverDetails = useMemo(() => {
+                return driverLocations.map(loc => {
+                    const userDetail = allUsers.find(u => u.id === loc.driverId) || {};
+                    return {
+                        ...loc,
+                        name: userDetail.name || 'Unknown Driver',
+                        contactNumber: userDetail.contactNumber || 'N/A',
+                        baseBranch: userDetail.currentBranch || 'N/A',
+                        latitude: parseFloat(loc.latitude), // Ensure coordinates are float
+                        longitude: parseFloat(loc.longitude)
+                    };
+                }).sort((a, b) => {
+                    // Sort by status: Active Job first, then Online, then Offline/Unknown
+                    if (a.currentBookingId && !b.currentBookingId) return -1;
+                    if (!a.currentBookingId && b.currentBookingId) return 1;
+                    if (a.isTrackingActive && !b.isTrackingActive) return -1;
+                    if (!a.isTrackingActive && b.isTrackingActive) return 1;
+                    return a.name.localeCompare(b.name);
+                });
+            }, [driverLocations, allUsers]);
+
+            const activeDrivers = driverDetails.filter(d => d.isTrackingActive);
+
+            useEffect(() => {
+                // 1. Check if Google Maps API is loaded
+                if (typeof window.google === 'undefined' || !mapRef.current) return;
+                
+                const googleMaps = window.google.maps;
+
+                // 2. Initialize Map (Cebu City Center)
+                const initialMapCenter = { lat: 10.3157, lng: 123.8854 }; 
+                const map = new googleMaps.Map(mapRef.current, {
+                    center: initialMapCenter,
+                    zoom: 13,
+                    mapId: 'AHMAS_DISPATCH_MAP' // Using Map ID
+                });
+
+                // 3. Clear existing markers (only necessary if we stored the map object in state, but good practice for cleanup)
+                // In this implementation, the old markers will be collected by JS GC when the effect reruns and overwrites the map instance
+
+                // 4. Track info windows to close previous ones
+                let currentInfoWindow = null;
+
+                // 5. Add new markers
+                driverDetails.forEach(driver => {
+                    if (driver.isTrackingActive && driver.latitude && driver.longitude && !isNaN(driver.latitude) && !isNaN(driver.longitude)) {
+                        const position = { lat: driver.latitude, lng: driver.longitude };
+
+                        let markerColor = 'gray'; // Default
+                        if (driver.currentBookingId) {
+                            markerColor = 'green';
+                        } else if (driver.isTrackingActive) {
+                            markerColor = 'blue';
+                        }
+
+                        // Use custom dot icon based on status
+                        const iconUrl = `https://maps.google.com/mapfiles/ms/icons/${markerColor}-dot.png`;
+
+                        const marker = new googleMaps.Marker({
+                            position: position,
+                            map: map,
+                            icon: iconUrl,
+                            title: `${driver.name} - ${driver.currentDriverStatus}`,
+                        });
+
+                        const content = `
+                            <div class="p-2 font-sans text-xs max-w-[200px] text-slate-800">
+                                <h4 class="font-bold text-sm mb-1">${driver.name} <span class="text-[10px] text-slate-500 ml-1">(@${driver.baseBranch})</span></h4>
+                                <p class="text-[10px] text-slate-500 mb-1">Status: <span class="font-semibold text-slate-700">${driver.currentDriverStatus || 'Idle'}</span></p>
+                                
+                                ${driver.currentBookingId ? 
+                                    `<p class="font-medium text-logo-green-700 mt-1 flex items-center gap-1"><i class="text-xs">📍</i> Destination: ${driver.assignedClientAddress}</p>` 
+                                    : `<p class="font-medium text-blue-500 mt-1">Available: Low Frequency Tracking</p>`
+                                }
+                                
+                                <div class="mt-3 flex gap-2">
+                                    <a href="tel:${driver.contactNumber}" class="text-blue-600 hover:text-blue-800 text-xs font-bold" target="_self">📞 Call</a>
+                                    <a href="sms:${driver.contactNumber}" class="text-teal-600 hover:text-teal-800 text-xs font-bold" target="_self">💬 Message</a>
+                                </div>
+                            </div>
+                        `;
+                        
+                        const infoWindow = new googleMaps.InfoWindow({ content: content });
+
+                        marker.addListener('click', () => {
+                            if (currentInfoWindow) currentInfoWindow.close();
+                            infoWindow.open(map, marker);
+                            currentInfoWindow = infoWindow;
+                        });
+
+                        markerRef.current[driver.id] = marker;
+                    }
+                });
+
+                // Fit map bounds to active markers if any exist
+                if (activeDrivers.length > 0) {
+                    const bounds = new googleMaps.LatLngBounds();
+                    activeDrivers.forEach(driver => {
+                        if(driver.latitude && driver.longitude) {
+                            bounds.extend({ lat: driver.latitude, lng: driver.longitude });
+                        }
+                    });
+                    map.fitBounds(bounds);
+                    if(activeDrivers.length === 1) {
+                         map.setZoom(16); // Zoom in closer for single marker
+                    }
+                }
+                
+                // Final cleanup: remove markers when component unmounts
+                return () => {
+                    Object.values(markerRef.current).forEach(marker => marker.setMap(null));
+                    markerRef.current = {};
+                };
+            }, [driverDetails]); // Re-run effect when driver data changes
+
+
+            const callDriver = (number) => {
+                if (number && number !== 'N/A') {
+                    window.open(`tel:${number}`, '_self');
+                } else {
+                    setModal({ isOpen: true, type: 'alert', title: 'Contact Error', message: 'Driver contact number is unavailable.', confirmColor: 'red', onConfirm: closeModal });
+                }
+            };
+            const messageDriver = (number) => {
+                if (number && number !== 'N/A') {
+                    window.open(`sms:${number}`, '_self');
+                } else {
+                    setModal({ isOpen: true, type: 'alert', title: 'Contact Error', message: 'Driver contact number is unavailable.', confirmColor: 'red', onConfirm: closeModal });
+                }
+            };
+            
+            const dispatchContact = appConfig.dispatchContact || '+639123456789 (Mock)';
+
+            return (
+                <div className="space-y-6 fade-in">
+                    <h2 className="text-lg font-bold text-blue-800 flex gap-2 items-center"><Icons.Compass size={18} className="text-blue-700"/> Dispatch Map & Driver Status</h2>
+
+                    {/* Map Implementation */}
+                    <div className="bg-white rounded-xl shadow-lg border border-blue-100 overflow-hidden">
+                        <div 
+                            ref={mapRef} 
+                            id="map-container" 
+                            className="h-64 w-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold"
+                        >
+                            {/* This text serves as a fallback while the API loads */}
+                            {typeof window.google === 'undefined' ? (
+                                <div className="text-center p-4">
+                                    <Icons.Map size={48} className="mx-auto mb-2"/>
+                                    <p className="text-sm">Google Maps API Key required or API loading failed.</p>
+                                    <p className="text-xs text-red-500 mt-1">Please ensure "YOUR\_GOOGLE\_MAPS\_API\_KEY\_HERE" is replaced with your valid key in the HTML header.</p>
+                                </div>
+                            ) : (
+                                <span>Initializing Map...</span>
+                            )}
+                        </div>
+                        
+                        {/* Driver Status List */}
+                        <div className="divide-y divide-slate-100 max-h-[50vh] overflow-y-auto">
+                            {driverDetails.length === 0 ? (
+                                <p className="p-6 text-center text-slate-400 italic text-sm">No drivers found or no data available.</p>
+                            ) : (
+                                driverDetails.map(d => (
+                                    <div key={d.id} className={`p-4 border-l-4 ${d.currentBookingId ? 'border-l-logo-green-500' : (d.isTrackingActive ? 'border-l-blue-400' : 'border-l-slate-200')} flex justify-between items-start hover:bg-slate-50 transition-colors`}>
+                                        <div className="flex flex-col flex-1 pr-4">
+                                            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1">
+                                                <Icons.SteeringWheel size={14} className="text-blue-600"/> {d.name} 
+                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${d.isTrackingActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {d.isTrackingActive ? 'ONLINE' : 'OFFLINE'}
+                                                </span>
+                                            </h3>
+                                            <p className="text-xs text-slate-500 mt-1">Status: <span className="font-semibold text-slate-700">{d.currentDriverStatus || 'Idle'}</span></p>
+                                            
+                                            {d.assignedClientAddress && (
+                                                <p className="text-xs text-slate-700 font-medium mt-2 bg-logo-green-50 p-1 rounded-md border border-logo-green-200">
+                                                    <Icons.MapPin size={10} className="inline text-logo-green-700 mr-1"/>
+                                                    <span className="font-bold">Destination:</span> {d.assignedClientAddress}
+                                                </p>
+                                            )}
+                                            {d.latitude && d.isTrackingActive && (
+                                                <p className="text-[10px] text-slate-400 mt-1">
+                                                    Lat/Lng: ({d.latitude.toFixed(4)}, {d.longitude.toFixed(4)}) - Freq: {d.trackingMode?.toUpperCase() || 'N/A'}
+                                                </p>
+                                            )}
+                                            
+                                        </div>
+                                        <div className="flex flex-col gap-2 min-w-[50px] items-end">
+                                            {d.contactNumber !== 'N/A' && (
+                                                <>
+                                                    <button onClick={() => callDriver(d.contactNumber)} className="text-white bg-blue-600 hover:bg-blue-700 p-2 rounded-full shadow-md transition-transform active:scale-95" title="Call Driver">
+                                                        <Icons.Smartphone size={20}/>
+                                                    </button>
+                                                    <button onClick={() => messageDriver(d.contactNumber)} className="text-blue-600 bg-blue-100 hover:bg-blue-200 p-2 rounded-full shadow-sm transition-transform active:scale-95" title="Message Driver">
+                                                        <Icons.MessageSquare size={20}/>
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Dispatch Contact Block */}
+                    <div className="p-4 bg-slate-100 rounded-xl text-xs text-slate-600 border border-slate-200 flex justify-between items-center">
+                        <div>
+                            <p className="font-bold text-slate-800 mb-1">Dispatch Hotline:</p>
+                            <p className="text-sm font-mono text-logo-green-700">{dispatchContact}</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => callDriver(dispatchContact)} className="bg-logo-green-600 text-white p-2 rounded-full text-xs font-bold shadow-md hover:bg-logo-green-700">Call</button>
+                            <button onClick={() => messageDriver(dispatchContact)} className="bg-teal-600 text-white p-2 rounded-full text-xs font-bold shadow-md hover:bg-teal-700">Message</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // --- List Management Component --- (Unchanged for brevity, but rooms are now included)
         const ListManagement = ({ therapists, services, durations, drivers, rooms, onAdd, onDelete, onEdit }) => {
             const [activeTab, setActiveTab] = useState('therapist');  
             
             // Add State
             const [newItemName, setNewItemName] = useState('');
-            const [newItemCategory, setNewItemCategory] = useState(SERVICE_CATEGORIES[0]); // ADDED: Service Category State
+            const [newItemCategory, setNewItemCategory] = useState(SERVICE_CATEGORIES[0]); 
             const [newItemPrices, setNewItemPrices] = useState({});  
             const [newItemCommission, setNewItemCommission] = useState('');  
             
@@ -243,7 +483,6 @@
                 let extraData = null;
                 if (activeTab === 'service') {
                     if (durations.length === 0) return; 
-                    // ADDED: Include category in extraData
                     extraData = { prices: newItemPrices, category: newItemCategory };
                 } else if (activeTab === 'therapist') {
                     extraData = { commissionRate: parseFloat(newItemCommission) || 0 };
@@ -313,7 +552,7 @@
                 currentList = drivers;
                 placeholderText = "Enter Driver Name";
                 icon = <Icons.Car size={18} />;
-            } else if (activeTab === 'room') { // ADDED
+            } else if (activeTab === 'room') { 
                 currentList = rooms;
                 placeholderText = "Enter Room Name/Number";
                 icon = <Icons.DoorOpen size={18} />;
@@ -365,7 +604,7 @@
                                         <select 
                                             value={newItemCategory} 
                                             onChange={e => setNewItemCategory(e.target.value)}
-                                            className="w-full p-2 border rounded-lg text-sm bg-white outline-none"
+                                            className="w-full p-2 border rounded-lg text-sm bg-white outline-none custom-select"
                                         >
                                             {SERVICE_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                                         </select>
@@ -377,7 +616,7 @@
                                         {durations.map(d => (
                                             <div key={d.id} className="flex items-center gap-2 bg-white p-2 border rounded">
                                                 <span className="text-xs font-bold text-slate-600 whitespace-nowrap w-16">{d.name}:</span>
-                                                <input 
+                                                <input  
                                                     type="number"  
                                                     placeholder="Price"
                                                     className="w-full text-sm outline-none"
@@ -409,7 +648,7 @@
 
                             <button  
                                 type="submit"  
-                                disabled={isServiceAddDisabled} 
+                                disabled={isServiceAddDisabled}  
                                 className={`w-full text-white p-3 rounded-lg font-bold transition shadow-sm ${
                                     isServiceAddDisabled
                                         ? 'bg-slate-400 cursor-not-allowed'
@@ -444,7 +683,6 @@
                                                 ) : (
                                                     <div className="flex flex-col">
                                                         <span className="text-slate-700 font-medium">{item.name}</span>
-                                                        {/* ADDED: Show Category in List */}
                                                         {activeTab === 'service' && item.category && (
                                                             <span className="text-[10px] text-slate-400 uppercase">{item.category}</span>
                                                         )}
@@ -510,8 +748,8 @@
                                                     {editingId === item.id ? (
                                                         <div className="mt-2 bg-slate-100 p-2 rounded flex items-center gap-2">
                                                             <span className="font-bold w-20">Rate (%):</span>
-                                                            <input  
-                                                                type="number"  
+                                                            <input
+                                                                type="number"
                                                                 min="0"
                                                                 max="100"
                                                                 step="0.1"
@@ -539,8 +777,7 @@
                 </div>
             );
         };
-
-        // --- Admin Reset User Modal ---
+        // --- Admin Reset User Modal --- (Unchanged)
         const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin, userRole }) => {
             if (!editUserModal.isOpen || !editUserModal.user) return null;
 
@@ -626,7 +863,10 @@
             const [servicesList, setServicesList] = useState([]);
             const [durationsList, setDurationsList] = useState([]);
             const [driversList, setDriversList] = useState([]);  
-            const [roomsList, setRoomsList] = useState([]); // ADDED: Room List State
+            const [roomsList, setRoomsList] = useState([]); 
+            
+            // NEW: Driver Locations/Status List
+            const [driverLocations, setDriverLocations] = useState([]); 
             
             const [view, setView] = useState('dashboard');
             const [expandedHistoryId, setExpandedHistoryId] = useState(null);
@@ -664,11 +904,14 @@
                 transportFee: '',
                 driver: '',
                 room: '',
-                paymentMethod: 'Cash' // ADDED: Default to Cash
+                paymentMethod: 'Cash' 
             });
             const [modal, setModal] = useState({
                 isOpen: false, type: 'confirm', title: '', message: '', onConfirm: null, confirmColor: 'red'
             });
+
+            // NEW: App Configuration State (for Dispatch Contact)
+            const [appConfig, setAppConfig] = useState({ dispatchContact: '+639123456789' }); 
 
             const [editUserModal, setEditUserModal] = useState({ isOpen: false, user: null, newPin: '' });
 
@@ -764,6 +1007,17 @@
                                 setFb({ db, auth, appId: currentAppId });
                             }
                         });
+                        
+                        // NEW: Load remote config (for dispatch contact)
+                        const configRef = db.collection('config').doc('app_settings');
+                        const configSnap = await configRef.get();
+                        if (configSnap.exists) {
+                             const data = configSnap.data();
+                             if(data.dispatchContact) {
+                                setAppConfig(prev => ({ ...prev, dispatchContact: data.dispatchContact }));
+                             }
+                        }
+
                     } catch (error) {  
                         console.error("FB Init Error:", error);  
                         setConfigError(error.message);  
@@ -888,14 +1142,14 @@
                         }));
                     });
 
-                // ADDED: Drivers Listener
+                // Drivers Listener
                 const unsubDrivers = getCollection('drivers')
                     .onSnapshot((snapshot) => {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         setDriversList(data.sort((a, b) => a.name.localeCompare(b.name)));
                     }, (error) => console.error("Sync Error: Drivers", error));
 
-                // ADDED: Rooms Listener
+                // Rooms Listener
                 const unsubRooms = getCollection('rooms')
                     .onSnapshot((snapshot) => {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -907,6 +1161,13 @@
                             return a.name.localeCompare(b.name);
                         }));
                     }, (error) => console.error("Sync Error: Rooms", error));
+
+                // NEW: Driver Location Listener
+                const unsubDriverLocations = getCollection('driver_locations')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setDriverLocations(data);
+                    }, (error) => console.error("Sync Error: Driver Locations", error));
                 
                 return () => {  
                     unsubTrans();  
@@ -915,7 +1176,8 @@
                     unsubServices();
                     unsubDurations();
                     unsubDrivers();
-                    unsubRooms(); // Cleanup rooms
+                    unsubRooms();
+                    unsubDriverLocations(); // Cleanup new listener
                 };
             }, [fb, fbUser, isTransactionListenerActive, view, dashboardDate]);  
 
@@ -984,7 +1246,7 @@
 
             // --- 3. HELPERS ---
             
-            // ADDED: Helper to Group Services by Category
+            // Helper to group Services by Category
             const groupedServices = useMemo(() => {
                 const groups = {};
                 // Initialize groups based on constants to ensure order
@@ -993,11 +1255,9 @@
                 servicesList.forEach(s => {
                     const cat = s.category || 'Others'; // Default to 'Others' if undefined
                     if (!groups[cat]) {
-                        // If category not in standard list, put in 'Others' or create new group?  
-                        // Let's create new group to be safe, or just push to Others.
-                        // For now, let's force standard categories.
+                        // If category not in standard list, put in 'Others'
                         if (groups['Others']) groups['Others'].push(s);
-                        else groups[cat] = [s];
+                        else groups[cat] = [s]; // Should not happen if data is clean
                     } else {
                         groups[cat].push(s);
                     }
@@ -1203,10 +1463,6 @@
             }, [history, historyStartDate, historyEndDate, user]);
 
             const downloadCSV = (record) => {
-                // ADDED: Driver column to header
-                // ADDED: Client Contact column
-                // ADDED: Room column
-                // ADDED: Payment Method column
                 const headers = ['Date', 'Branch', 'Time', 'Client Name', 'Client Contact', 'Description', 'Service / Category', 'Duration', 'Therapist', 'Driver', 'Location', 'Room', 'Payment Method', 'Transport Fee', 'Total Amount', 'Commission Amount', 'Status', 'Recorded By', 'Notes'];  
                 
                 const getCommissionForTransaction = (t, therapistStatsArchive) => {
@@ -1243,7 +1499,7 @@
                         `"${t.branch || 'N/A'}"`,  
                         `"${t.time}"`,  
                         `"${t.clientName || ''}"`, // Client Name
-                        `"${t.clientContact || ''}"`, // ADDED: Client Contact
+                        `"${t.clientContact || ''}"`, // Client Contact
                         `"${t.description || ''}"`,  
                         `"${t.service || t.category || ''}"`,  
                         `"${t.duration || ''}"`,  
@@ -1251,7 +1507,7 @@
                         `"${t.driver || ''}"`,  
                         `"${t.location === 'home' ? 'Home Service' : 'In Spa'}"`,
                         `"${t.room || ''}"`,  
-                        `"${t.paymentMethod || 'Cash'}"`, // ADDED: Payment Method
+                        `"${t.paymentMethod || 'Cash'}"`, // Payment Method
                         t.transportFee || '0',
                         t.amount,  
                         commissionAmount.toFixed(2),  
@@ -1326,7 +1582,7 @@
                 });
             };
 
-            // ADDED: Logic for listType === 'driver'
+            // Helper to handle adding/removing items from master lists
             const handleAddItem = async (listType, itemName, extraData = null) => {
                 const trimmedItemName = itemName.trim();
                 if (!trimmedItemName) return;
@@ -1343,7 +1599,7 @@
                 } else if (listType === 'service') {
                     collectionName = 'services';
                     checkList = servicesList;
-                    // UPDATED: Handle extraData which now contains prices AND category
+                    // Handle extraData which now contains prices AND category
                     if (extraData) {
                         if (extraData.prices || extraData.category) {
                             data.prices = extraData.prices || {};
@@ -1358,7 +1614,7 @@
                 } else if (listType === 'driver') {
                     collectionName = 'drivers';
                     checkList = driversList;
-                } else if (listType === 'room') { // ADDED
+                } else if (listType === 'room') { 
                     collectionName = 'rooms';
                     checkList = roomsList;
                 } else {
@@ -1386,7 +1642,7 @@
                 else if (listType === 'service') collectionName = 'services';
                 else if (listType === 'duration') collectionName = 'durations';
                 else if (listType === 'driver') collectionName = 'drivers';  
-                else if (listType === 'room') collectionName = 'rooms'; // ADDED
+                else if (listType === 'room') collectionName = 'rooms'; 
                 else return;
 
                 const basePath = `artifacts/${fb.appId}/public/data`;
@@ -1426,7 +1682,7 @@
                     collectionName = 'drivers';
                     checkList = driversList;
                 }
-                else if (listType === 'room') { // ADDED
+                else if (listType === 'room') { 
                     collectionName = 'rooms';
                     checkList = roomsList;
                 }
@@ -1600,13 +1856,13 @@
                 } else {
                     // Updated Validation for Multi-Therapist (Simplified)
                     if (!formData.clientName) {
-                           setModal({ isOpen: true, type: 'alert', title: 'Missing Information', message: 'Please enter a Client Name.', onConfirm: closeModal, confirmColor: 'red' });
-                           return;
+                            setModal({ isOpen: true, type: 'alert', title: 'Missing Information', message: 'Please enter a Client Name.', onConfirm: closeModal, confirmColor: 'red' });
+                            return;
                     }
 
                     if (selectedTherapists.length === 0) {
-                           setModal({ isOpen: true, type: 'alert', title: 'Missing Therapist', message: 'Please add at least one Therapist.', onConfirm: closeModal, confirmColor: 'red' });
-                           return;
+                            setModal({ isOpen: true, type: 'alert', title: 'Missing Therapist', message: 'Please add at least one Therapist.', onConfirm: closeModal, confirmColor: 'red' });
+                            return;
                     }
                     
                     // Validate individual rows
@@ -1692,7 +1948,7 @@
                             transportFee: splitTransport, // Split fee
                             driver: formData.location === 'home' ? driverString : '',
                             room: formData.location === 'spa' ? formData.room : '',
-                            paymentMethod: formData.paymentMethod // ADDED: Save payment method
+                            paymentMethod: formData.paymentMethod // Save payment method
                         });
                     });
                 }
@@ -2058,12 +2314,12 @@
                             <form onSubmit={handleLoginSubmit} className="space-y-4">
                                 <div className="relative">
                                     <Icons.MapPin size={18} className="absolute left-3 top-3.5 text-slate-400" />
-                                    <select required value={loginBranch} onChange={(e)=>setLoginBranch(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white appearance-none text-slate-600">
+                                    <select required value={loginBranch} onChange={(e)=>setLoginBranch(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white custom-select text-slate-600">
                                             <option value="" disabled>Select Branch Location</option>
                                             {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
                                             <option value="ALL" className="font-bold text-logo-green-700">ALL BRANCHES (Owner View)</option>
                                     </select>
-                                    <Icons.ChevronDown size={16} className="absolute right-3 top-4 text-slate-400 pointer-events-none"/>
+                                    {/* Chevron icon is handled by custom-select background image */}
                                 </div>
                                 <div className="relative"><Icons.User size={18} className="absolute left-3 top-3.5 text-slate-400" /><input required value={loginUsername} onChange={(e)=>setLoginUsername(e.target.value)} placeholder="Username" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white" /></div>
                                 <div className="relative"><Icons.Fingerprint size={18} className="absolute left-3 top-3.5 text-slate-400" /><input required type="password" inputMode="numeric" value={loginPin} onChange={(e)=>setLoginPin(e.target.value)} placeholder="PIN" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white" /></div>
@@ -2106,10 +2362,15 @@
                     </header>
 
                     <main className="max-w-3xl mx-auto px-4 py-6">
+                        {/* NAVIGATION BAR - ADDED MAP VIEW */}
                         <div className="flex p-1 bg-slate-200/60 rounded-xl mb-6 sticky top-[70px] z-10 backdrop-blur-sm overflow-x-auto">
                             <button onClick={()=>setView('dashboard')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='dashboard'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.LayoutDashboard size={16}/> Daily</button>
                             <button onClick={()=>setView('add')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='add'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.Plus size={16}/> Booking</button>
                             <button onClick={()=>setView('expense')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='expense'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.MinusCircle size={16}/> Expense</button>
+                            {/* Display Map view for Admin and Staff (Dispatchers) */}
+                            {user.role !== 'staff' && (
+                                <button onClick={()=>setView('map')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='map'?'bg-white text-blue-700 shadow-sm':'text-slate-500'}`}><Icons.Compass size={16}/> Dispatch Map</button> 
+                            )}
                             <button onClick={()=>setView('profile')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='profile'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.UserCog size={16}/> Profile</button>
                             {user.role === 'admin' && <button onClick={()=>setView('lists')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='lists'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.ShieldCheck size={16}/> Lists</button>}
                             
@@ -2126,6 +2387,18 @@
                                 </button>
                             )}
                         </div>
+
+                        {/* RENDER VIEWS */}
+                        
+                        {view === 'map' && user.role !== 'staff' && (
+                            <DispatchMap 
+                                driverLocations={driverLocations} 
+                                allUsers={users} 
+                                appConfig={appConfig}
+                                setModal={setModal}
+                                closeModal={closeModal}
+                            />
+                        )}
 
                         {view === 'dashboard' && (
                             <div className="space-y-6 fade-in">
@@ -2225,39 +2498,39 @@
                                              if (idxA === -1) return 1;
                                              if (idxB === -1) return -1;
                                              return idxA - idxB;
-                                         }).map(branch => (
-                                            <div key={branch} className="mb-4 last:mb-0">
-                                                {(user.currentBranch === 'ALL' || Object.keys(therapistStats).length > 1) && (
-                                                    <h4 className="text-[10px] font-bold text-logo-green-700 uppercase mb-2 bg-logo-green-50 px-2 py-1 rounded inline-block">
-                                                        {branch}
-                                                    </h4>
-                                                )}
-                                                <div className="space-y-2">
-                                                    {therapistStats[branch].map((s) => (
-                                                        <div key={s.name} className="flex justify-between items-center pb-2 border-b border-slate-50 last:border-0 last:pb-0 ml-1">
-                                                            <div className="flex gap-2 items-center">
-                                                                <span className="w-6 h-6 bg-logo-green-100 text-logo-green-700 rounded-full flex items-center justify-center text-[10px] font-bold">{s.name.charAt(0)}</span>
-                                                                <span className="text-sm font-semibold text-slate-700">{s.name}</span>
+                                           }).map(branch => (
+                                                <div key={branch} className="mb-4 last:mb-0">
+                                                    {(user.currentBranch === 'ALL' || Object.keys(therapistStats).length > 1) && (
+                                                        <h4 className="text-[10px] font-bold text-logo-green-700 uppercase mb-2 bg-logo-green-50 px-2 py-1 rounded inline-block">
+                                                            {branch}
+                                                        </h4>
+                                                    )}
+                                                    <div className="space-y-2">
+                                                        {therapistStats[branch].map((s) => (
+                                                            <div key={s.name} className="flex justify-between items-center pb-2 border-b border-slate-50 last:border-0 last:pb-0 ml-1">
+                                                                <div className="flex gap-2 items-center">
+                                                                    <span className="w-6 h-6 bg-logo-green-100 text-logo-green-700 rounded-full flex items-center justify-center text-[10px] font-bold">{s.name.charAt(0)}</span>
+                                                                    <span className="text-sm font-semibold text-slate-700">{s.name}</span>
+                                                                </div>
+                                                                <div className="text-right flex flex-col">
+                                                                    <span className="text-sm font-bold text-logo-green-700 flex items-center gap-1">
+                                                                        <Icons.TrendingUp size={12} className="text-teal-600"/> {formatCurrency(s.commission)}  
+                                                                    </span>
+                                                                    <span className="text-[9px] text-slate-400">({s.rate}% of {formatCurrency(s.amount)})</span>
+                                                                </div>
                                                             </div>
-                                                            <div className="text-right flex flex-col">
-                                                                <span className="text-sm font-bold text-logo-green-700 flex items-center gap-1">
-                                                                    <Icons.TrendingUp size={12} className="text-teal-600"/> {formatCurrency(s.commission)}  
-                                                                </span>
-                                                                <span className="text-[9px] text-slate-400">({s.rate}% of {formatCurrency(s.amount)})</span>
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))
+                                            ))
                                     )}
                                 </div>
 
                                 <div>
                                     <div className="flex justify-between items-center mb-4">
                                         <h2 className="text-lg font-bold text-logo-green-900 flex gap-2 items-center">
-                                            <Icons.LayoutDashboard size={18}/> 
-                                            {dashboardDate === getTodayStr() ? "Live Records" : "Future Bookings"} 
+                                            <Icons.LayoutDashboard size={18}/>  
+                                            {dashboardDate === getTodayStr() ? "Live Records" : "Future Bookings"}  
                                             <span className="text-xs font-normal text-slate-500 ml-2">({showMyShift ? 'My Shift' : user.currentBranch})</span>
                                         </h2>
                                         <div className="flex items-center gap-2">
@@ -2321,7 +2594,6 @@
                                                         
                                                         <h3 className={`font-bold ${t.type === 'expense' ? 'text-red-700' : 'text-slate-800'}`}>
                                                             {t.type === 'expense' ? `Expense: ${t.category}` : t.clientName}
-                                                            {/* ADDED: Display Contact on Dashboard */}
                                                             {t.clientContact && t.type !== 'expense' && <span className="text-xs font-normal text-slate-500 ml-2"><Icons.User size={10} className="inline"/> {t.clientContact}</span>}
                                                         </h3>
                                                         
@@ -2402,12 +2674,11 @@
                                                 required  
                                                 value={formData.targetBranch}  
                                                 onChange={(e)=>setFormData({...formData, targetBranch:e.target.value})}  
-                                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white appearance-none text-slate-600 font-bold border-logo-green-400"
+                                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white custom-select text-slate-600 font-bold border-logo-green-400"
                                             >
                                                 <option value="" disabled>SELECT TARGET BRANCH*</option>
                                                 {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
                                             </select>
-                                            <Icons.ChevronDown size={16} className="absolute right-3 top-4 text-slate-400 pointer-events-none"/>
                                         </div>
                                     ) : (
                                         <div className="p-3 bg-logo-green-50 rounded-lg text-sm text-logo-green-800 font-medium flex items-center gap-2"><Icons.MapPin size={16}/> Adding to: {user.currentBranch}</div>
@@ -2417,8 +2688,8 @@
                                     <div className="relative">
                                         <label className="text-xs font-bold text-slate-500 ml-1 mb-1 block uppercase">Booking Date</label>
                                         <Icons.Calendar size={18} className="absolute left-3 top-9 text-slate-400" />
-                                        <input 
-                                            type="date" 
+                                        <input  
+                                            type="date"  
                                             required
                                             value={formData.bookingDate}
                                             onChange={e => setFormData({...formData, bookingDate: e.target.value})}
@@ -2428,15 +2699,15 @@
 
                                     {/* Location Toggle (In Spa / Home Service) */}
                                     <div className="grid grid-cols-2 gap-3 bg-slate-100 p-1.5 rounded-xl">
-                                        <button 
-                                            type="button" 
+                                        <button  
+                                            type="button"  
                                             onClick={() => toggleLocation('spa')}
                                             className={`py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${formData.location === 'spa' ? 'bg-white text-logo-green-700 shadow-sm' : 'text-slate-400'}`}
                                         >
                                             <Icons.Building2 size={16}/> In Spa
                                         </button>
-                                        <button 
-                                            type="button" 
+                                        <button  
+                                            type="button"  
                                             onClick={() => toggleLocation('home')}
                                             className={`py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${formData.location === 'home' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400'}`}
                                         >
@@ -2444,14 +2715,14 @@
                                         </button>
                                     </div>
 
-                                    {/* Spa Specifics (Room Selection) - ADDED */}
+                                    {/* Spa Specifics (Room Selection) */}
                                     {formData.location === 'spa' && (
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 animate-fadeIn">
                                             <label className="text-xs font-bold text-slate-500 mb-1 block flex items-center gap-1"><Icons.DoorOpen size={12}/> Assigned Room</label>
                                             <select 
                                                 value={formData.room} 
                                                 onChange={e => setFormData({...formData, room: e.target.value})}
-                                                className="w-full p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-500 bg-white appearance-none text-sm"
+                                                className="w-full p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-500 bg-white custom-select text-sm"
                                             >
                                                 <option value="">Select Room (Optional)</option>
                                                 {roomsList.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
@@ -2467,9 +2738,9 @@
                                                 <label className="text-xs font-bold text-blue-700 mb-1 block">Transportation Charge (Total)</label>
                                                 <div className="relative">
                                                     <span className="absolute left-3 top-3 text-blue-400 font-bold">P</span>
-                                                    <input 
-                                                        type="number" 
-                                                        placeholder="0.00" 
+                                                    <input  
+                                                        type="number"  
+                                                        placeholder="0.00"  
                                                         value={formData.transportFee}
                                                         onChange={e => handleTransportChange(e.target.value)}
                                                         className="w-full pl-8 pr-4 py-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
@@ -2495,7 +2766,7 @@
                                                     onChange={e => {
                                                         if(e.target.value) toggleDriverSelection(e.target.value);
                                                     }}
-                                                    className="w-full p-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white appearance-none text-sm"
+                                                    className="w-full p-2 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white custom-select text-sm"
                                                 >
                                                     <option value="">+ Add Driver</option>
                                                     {driversList
@@ -2514,14 +2785,14 @@
                                     
                                     <div className="space-y-2">
                                         <input required placeholder="Client Name*" value={formData.clientName} onChange={e=>setFormData({...formData, clientName:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
-                                        {/* ADDED: Client Contact Input */}
+                                        {/* Client Contact Input */}
                                         <input placeholder="Client Contact No." value={formData.clientContact} onChange={e=>setFormData({...formData, clientContact:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
                                     </div>
                                     
                                     <div className="space-y-4">
                                         
                                         {/* Duration Dropdown (Global) */}
-                                        <select value={formData.duration} onChange={e=>handleDurationChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none font-bold text-slate-700">
+                                        <select value={formData.duration} onChange={e=>handleDurationChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 custom-select font-bold text-slate-700">
                                             <option value="" disabled>Select Duration (Applied to all)</option>
                                             {durationsList.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
                                         </select>
@@ -2546,7 +2817,7 @@
                                                                 <select 
                                                                     value={therapistRows[name]?.service || ''} 
                                                                     onChange={(e) => updateTherapistRow(name, 'service', e.target.value)}
-                                                                    className="text-xs p-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-1 focus:ring-logo-green-500 outline-none w-full"
+                                                                    className="text-xs p-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-1 focus:ring-logo-green-500 outline-none w-full custom-select"
                                                                 >
                                                                     <option value="" disabled>Select Service*</option>
                                                                     {Object.entries(groupedServices).map(([category, services]) => (
@@ -2559,7 +2830,7 @@
                                                                     <select 
                                                                         value={therapistRows[name]?.duration || ''} 
                                                                         onChange={(e) => updateTherapistRow(name, 'duration', e.target.value)}
-                                                                        className="text-xs p-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-1 focus:ring-logo-green-500 outline-none"
+                                                                        className="text-xs p-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-1 focus:ring-logo-green-500 outline-none custom-select"
                                                                     >
                                                                         <option value="" disabled>Duration*</option>
                                                                         {durationsList.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
@@ -2591,8 +2862,8 @@
                                                     value="" 
                                                     onChange={e => {
                                                         if(e.target.value) toggleTherapistSelection(e.target.value);
-                                                    }} 
-                                                    className="w-full p-3 pl-10 border rounded-xl bg-slate-50 appearance-none hover:bg-slate-100 transition cursor-pointer text-logo-green-700 font-bold"
+                                                    }}  
+                                                    className="w-full p-3 pl-10 border rounded-xl bg-slate-50 custom-select hover:bg-slate-100 transition cursor-pointer text-logo-green-700 font-bold"
                                                 >
                                                     <option value="">+ Add Therapist</option>
                                                     {therapistsList
@@ -2626,10 +2897,10 @@
                                         </div>
                                     </div>
                                     
-                                    {/* ADDED: Payment Method Selector */}
+                                    {/* Payment Method Selector */}
                                     <div>
                                         <label className="text-xs font-bold text-slate-500 mb-2 block uppercase">Payment Method</label>
-                                        <div className="grid grid-cols-3 gap-2">
+                                        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                                             {[
                                                 { label: 'Cash', icon: <Icons.Banknote size={18}/> },  
                                                 { label: 'GCash', icon: <Icons.Smartphone size={18}/> },  
@@ -2659,7 +2930,7 @@
                             </div>
                         )}
                         
-                        {/* Expense Tracking View */}
+                        {/* Expense Tracking View (Unchanged) */}
                         {view === 'expense' && (
                             <div className="bg-white rounded-2xl shadow-sm border border-red-100 p-6 fade-in">
                                 <h2 className="text-xl font-bold text-red-700 mb-6 flex items-center gap-2"><Icons.MinusCircle size={24}/> Log Expense</h2>
@@ -2672,19 +2943,18 @@
                                                 required  
                                                 value={formData.targetBranch}  
                                                 onChange={(e)=>setFormData({...formData, targetBranch:e.target.value})}  
-                                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-red-700 bg-slate-50 focus:bg-white appearance-none text-slate-600 font-bold border-red-400"
+                                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-red-700 bg-slate-50 focus:bg-white custom-select text-slate-600 font-bold border-red-400"
                                             >
                                                 <option value="" disabled>SELECT BRANCH AFFECTED*</option>
                                                 {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
                                             </select>
-                                            <Icons.ChevronDown size={16} className="absolute right-3 top-4 text-slate-400 pointer-events-none"/>
                                         </div>
                                     ) : (
                                         <div className="p-3 bg-red-50 rounded-lg text-sm text-red-800 font-medium flex items-center gap-2"><Icons.MapPin size={16}/> Logging for: {user.currentBranch}</div>
                                     )}
 
                                     <div className="flex gap-2">
-                                        <select required value={formData.category} onChange={e=>setFormData({...formData, category:e.target.value})} className="flex-1 p-3 border rounded-xl bg-slate-50 appearance-none">
+                                        <select required value={formData.category} onChange={e=>setFormData({...formData, category:e.target.value})} className="flex-1 p-3 border rounded-xl bg-slate-50 custom-select">
                                             <option value="" disabled>Select Category*</option>
                                             <option value="Supplies">Supplies (Oil, Linens, etc.)</option>
                                             <option value="Maintenance">Maintenance/Repair</option>
@@ -2717,6 +2987,7 @@
                             </div>
                         )}
                         
+                        {/* Profile View (Unchanged) */}
                         {view === 'profile' && (
                             <div className="bg-white rounded-xl shadow-sm border border-logo-green-100 p-6 fade-in">
                                 <h3 className="font-bold text-slate-800 mb-4 flex gap-2"><Icons.UserCog className="text-logo-green-700"/> Profile</h3>
@@ -2737,21 +3008,21 @@
                             </div>
                         )}
                         
-                        {/* Data List Management View */}
-                        {/* Only visible to admin */}
+                        {/* Data List Management View (Rooms and Drivers now included) */}
                         {view === 'lists' && user.role === 'admin' && (  
                             <ListManagement  
                                 therapists={therapistsList}  
                                 services={servicesList}
                                 durations={durationsList}
                                 drivers={driversList}
-                                rooms={roomsList} // Pass rooms
+                                rooms={roomsList} 
                                 onAdd={handleAddItem}  
                                 onDelete={handleDeleteItem}
                                 onEdit={handleEditItem}
                             />
                         )}
 
+                        {/* Team Management View (Unchanged) */}
                         {view === 'team' && user.role === 'admin' && (  
                             <div className="space-y-6 fade-in">
                                 <h2 className="text-lg font-bold text-logo-green-900 flex gap-2"><Icons.Users/> Manage Staff</h2>
@@ -2854,7 +3125,7 @@
                                                 className="w-full p-2 border rounded"
                                             />
                                             {/* Role options */}
-                                            <select value={newUser.role} onChange={e=>setNewUser({...newUser, role:e.target.value})} className="w-full p-2 border rounded">
+                                            <select value={newUser.role} onChange={e=>setNewUser({...newUser, role:e.target.value})} className="w-full p-2 border rounded custom-select">
                                                 <option value="staff">Staff (4-digit PIN)</option>  
                                                 <option value="admin">Admin (6-digit PIN)</option>  
                                             </select>
@@ -2897,15 +3168,11 @@
                                             </div>
                                             {expandedHistoryId===h.id && (
                                                 <div className="bg-slate-50 p-4 border-t text-sm">
-                                                    {/* NEW: Display Therapist Commission Breakdown */}
+                                                    {/* Display Therapist Commission Breakdown */}
                                                     {h.therapist_stats && Object.keys(h.therapist_stats).length > 0 && (
                                                         <div className="mb-4">
                                                             <h4 className="text-xs font-bold text-logo-green-700 uppercase mb-2 flex items-center gap-1"><Icons.Trophy size={12}/> Daily Commission Breakdown:</h4>
                                                             {/* Check if the archived report contains multiple branches */}
-                                                            {Object.keys(h.therapist_stats).length > 1 && (
-                                                                <h5 className="text-[10px] font-bold text-slate-500 uppercase px-1">{h.branch}</h5>
-                                                            )}
-
                                                             {Object.keys(h.therapist_stats).map(branch => (
                                                                 <div key={branch} className="mb-2 last:mb-0">
                                                                     {Object.keys(h.therapist_stats).length > 1 && (
@@ -2924,7 +3191,7 @@
                                                             <hr className="mt-2"/>
                                                         </div>
                                                     )}
-                                                    {/* END NEW: Display Therapist Commission Breakdown */}
+                                                    {/* END Display Therapist Commission Breakdown */}
 
                                                     <h4 className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-1"><Icons.ClipboardList size={12}/> Transaction Log:</h4>
                                                     {h.transactions.map((t,i)=><div key={i} className="flex flex-col py-2 border-b last:border-0"><div className="flex justify-between"><span>{t.time} - {t.type==='expense'? t.category : t.clientName} ({t.type === 'expense' ? 'Expense' : t.service})</span><span className={`font-bold ${t.type==='expense'?'text-red-600':'text-logo-green-700'}`}>{formatCurrency(t.amount)}</span></div>{t.notes && t.notes.trim() && <span className="text-xs text-slate-500 italic mt-1">Desc: {t.notes}</span>}</div>)}
